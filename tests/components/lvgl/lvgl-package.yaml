@@ -132,6 +132,7 @@ lvgl:
 
   pages:
     - id: page1
+      bg_image_src: cat_image
       on_load:
         - logger.log: page loaded
         - lvgl.widget.focus:
