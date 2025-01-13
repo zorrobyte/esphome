@@ -276,6 +276,19 @@ void DebugComponent::get_device_info_(std::string &device_info) {
   device_info += " Cores:" + to_string(info.cores);
   device_info += " Revision:" + to_string(info.revision);
 
+  // Framework detection
+  device_info += "|Framework: ";
+#ifdef USE_ARDUINO
+  ESP_LOGD(TAG, "Framework: Arduino");
+  device_info += "Arduino";
+#elif defined(USE_ESP_IDF)
+  ESP_LOGD(TAG, "Framework: ESP-IDF");
+  device_info += "ESP-IDF";
+#else
+  ESP_LOGW(TAG, "Framework: UNKNOWN");
+  device_info += "UNKNOWN";
+#endif
+
   ESP_LOGD(TAG, "ESP-IDF Version: %s", esp_get_idf_version());
   device_info += "|ESP-IDF: ";
   device_info += esp_get_idf_version();
