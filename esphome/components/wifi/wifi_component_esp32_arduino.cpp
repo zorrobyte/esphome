@@ -11,6 +11,11 @@
 #ifdef USE_WIFI_WPA2_EAP
 #include <esp_wpa2.h>
 #endif
+
+#ifdef USE_WIFI_AP
+#include "dhcpserver/dhcpserver.h"
+#endif  // USE_WIFI_AP
+
 #include "lwip/apps/sntp.h"
 #include "lwip/dns.h"
 #include "lwip/err.h"
@@ -638,7 +643,12 @@ void WiFiComponent::wifi_event_callback_(esphome_wifi_event_id_t event, esphome_
 }
 
 WiFiSTAConnectStatus WiFiComponent::wifi_sta_connect_status_() {
-  auto status = WiFiClass::status();
+#if USE_ARDUINO_VERSION_CODE < VERSION_CODE(3, 1, 0)
+  const auto status = WiFiClass::status();
+#else
+  const auto status = WiFi.status();
+#endif
+
   if (status == WL_CONNECT_FAILED || status == WL_CONNECTION_LOST) {
     return WiFiSTAConnectStatus::ERROR_CONNECT_FAILED;
   }
