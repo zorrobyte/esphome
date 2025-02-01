@@ -1,8 +1,8 @@
 #include "sgp30.h"
+#include <cinttypes>
+#include "esphome/core/application.h"
 #include "esphome/core/hal.h"
 #include "esphome/core/log.h"
-#include "esphome/core/application.h"
-#include <cinttypes>
 
 namespace esphome {
 namespace sgp30 {
@@ -73,9 +73,10 @@ void SGP30Component::setup() {
     return;
   }
 
-  // Hash with compilation time
+  // Hash with compilation time and serial number
   // This ensures the baseline storage is cleared after OTA
-  uint32_t hash = fnv1_hash(App.get_compilation_time());
+  // Serial numbers are unique to each sensor, so mulitple sensors can be used without conflict
+  uint32_t hash = fnv1_hash(App.get_compilation_time() + std::to_string(this->serial_number_));
   this->pref_ = global_preferences->make_preference<SGP30Baselines>(hash, true);
 
   if (this->pref_.load(&this->baselines_storage_)) {
@@ -255,7 +256,7 @@ void SGP30Component::dump_config() {
     } else {
       ESP_LOGCONFIG(TAG, "  Baseline: No baseline configured");
     }
-    ESP_LOGCONFIG(TAG, "  Warm up time: %us", this->required_warm_up_time_);
+    ESP_LOGCONFIG(TAG, "  Warm up time: %" PRIu32 "s", this->required_warm_up_time_);
   }
   LOG_UPDATE_INTERVAL(this);
   LOG_SENSOR("  ", "eCO2 sensor", this->eco2_sensor_);
@@ -293,10 +294,6 @@ void SGP30Component::update() {
       this->eco2_sensor_->publish_state(eco2);
     if (this->tvoc_sensor_ != nullptr)
       this->tvoc_sensor_->publish_state(tvoc);
-
-    if (this->get_update_interval() != 1000) {
-      ESP_LOGW(TAG, "Update interval for SGP30 sensor must be set to 1s for optimized readout");
-    }
 
     this->status_clear_warning();
     this->send_env_data_();

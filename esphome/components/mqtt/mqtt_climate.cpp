@@ -17,8 +17,11 @@ void MQTTClimateComponent::send_discovery(JsonObject root, mqtt::SendDiscoveryCo
   auto traits = this->device_->get_traits();
   // current_temperature_topic
   if (traits.get_supports_current_temperature()) {
-    // current_temperature_topic
     root[MQTT_CURRENT_TEMPERATURE_TOPIC] = this->get_current_temperature_state_topic();
+  }
+  // current_humidity_topic
+  if (traits.get_supports_current_humidity()) {
+    root[MQTT_CURRENT_HUMIDITY_TOPIC] = this->get_current_humidity_state_topic();
   }
   // mode_command_topic
   root[MQTT_MODE_COMMAND_TOPIC] = this->get_mode_command_topic();
@@ -57,14 +60,28 @@ void MQTTClimateComponent::send_discovery(JsonObject root, mqtt::SendDiscoveryCo
     root[MQTT_TEMPERATURE_STATE_TOPIC] = this->get_target_temperature_state_topic();
   }
 
+  if (traits.get_supports_target_humidity()) {
+    // target_humidity_command_topic
+    root[MQTT_TARGET_HUMIDITY_COMMAND_TOPIC] = this->get_target_humidity_command_topic();
+    // target_humidity_state_topic
+    root[MQTT_TARGET_HUMIDITY_STATE_TOPIC] = this->get_target_humidity_state_topic();
+  }
+
   // min_temp
   root[MQTT_MIN_TEMP] = traits.get_visual_min_temperature();
   // max_temp
   root[MQTT_MAX_TEMP] = traits.get_visual_max_temperature();
-  // temp_step
-  root["temp_step"] = traits.get_visual_target_temperature_step();
+  // target_temp_step
+  root[MQTT_TARGET_TEMPERATURE_STEP] = roundf(traits.get_visual_target_temperature_step() * 10) * 0.1;
+  // current_temp_step
+  root[MQTT_CURRENT_TEMPERATURE_STEP] = roundf(traits.get_visual_current_temperature_step() * 10) * 0.1;
   // temperature units are always coerced to Celsius internally
   root[MQTT_TEMPERATURE_UNIT] = "C";
+
+  // min_humidity
+  root[MQTT_MIN_HUMIDITY] = traits.get_visual_min_humidity();
+  // max_humidity
+  root[MQTT_MAX_HUMIDITY] = traits.get_visual_max_humidity();
 
   if (traits.get_supports_presets() || !traits.get_supported_custom_presets().empty()) {
     // preset_mode_command_topic
@@ -192,6 +209,20 @@ void MQTTClimateComponent::setup() {
                     });
   }
 
+  if (traits.get_supports_target_humidity()) {
+    this->subscribe(this->get_target_humidity_command_topic(),
+                    [this](const std::string &topic, const std::string &payload) {
+                      auto val = parse_number<float>(payload);
+                      if (!val.has_value()) {
+                        ESP_LOGW(TAG, "Can't convert '%s' to number!", payload.c_str());
+                        return;
+                      }
+                      auto call = this->device_->make_call();
+                      call.set_target_humidity(*val);
+                      call.perform();
+                    });
+  }
+
   if (traits.get_supports_presets() || !traits.get_supported_custom_presets().empty()) {
     this->subscribe(this->get_preset_command_topic(), [this](const std::string &topic, const std::string &payload) {
       auto call = this->device_->make_call();
@@ -226,7 +257,7 @@ const EntityBase *MQTTClimateComponent::get_entity() const { return this->device
 bool MQTTClimateComponent::publish_state_() {
   auto traits = this->device_->get_traits();
   // mode
-  const char *mode_s = "";
+  const char *mode_s;
   switch (this->device_->mode) {
     case CLIMATE_MODE_OFF:
       mode_s = "off";
@@ -249,6 +280,8 @@ bool MQTTClimateComponent::publish_state_() {
     case CLIMATE_MODE_HEAT_COOL:
       mode_s = "heat_cool";
       break;
+    default:
+      mode_s = "unknown";
   }
   bool success = true;
   if (!this->publish(this->get_mode_state_topic(), mode_s))
@@ -270,6 +303,17 @@ bool MQTTClimateComponent::publish_state_() {
   } else {
     std::string payload = value_accuracy_to_string(this->device_->target_temperature, target_accuracy);
     if (!this->publish(this->get_target_temperature_state_topic(), payload))
+      success = false;
+  }
+
+  if (traits.get_supports_current_humidity() && !std::isnan(this->device_->current_humidity)) {
+    std::string payload = value_accuracy_to_string(this->device_->current_humidity, 0);
+    if (!this->publish(this->get_current_humidity_state_topic(), payload))
+      success = false;
+  }
+  if (traits.get_supports_target_humidity() && !std::isnan(this->device_->target_humidity)) {
+    std::string payload = value_accuracy_to_string(this->device_->target_humidity, 0);
+    if (!this->publish(this->get_target_humidity_state_topic(), payload))
       success = false;
   }
 
@@ -301,6 +345,8 @@ bool MQTTClimateComponent::publish_state_() {
         case CLIMATE_PRESET_ACTIVITY:
           payload = "activity";
           break;
+        default:
+          payload = "unknown";
       }
     }
     if (this->device_->custom_preset.has_value())
@@ -310,7 +356,7 @@ bool MQTTClimateComponent::publish_state_() {
   }
 
   if (traits.get_supports_action()) {
-    const char *payload = "unknown";
+    const char *payload;
     switch (this->device_->action) {
       case CLIMATE_ACTION_OFF:
         payload = "off";
@@ -330,6 +376,8 @@ bool MQTTClimateComponent::publish_state_() {
       case CLIMATE_ACTION_FAN:
         payload = "fan";
         break;
+      default:
+        payload = "unknown";
     }
     if (!this->publish(this->get_action_state_topic(), payload))
       success = false;
@@ -369,6 +417,8 @@ bool MQTTClimateComponent::publish_state_() {
         case CLIMATE_FAN_QUIET:
           payload = "quiet";
           break;
+        default:
+          payload = "unknown";
       }
     }
     if (this->device_->custom_fan_mode.has_value())
@@ -378,7 +428,7 @@ bool MQTTClimateComponent::publish_state_() {
   }
 
   if (traits.get_supports_swing_modes()) {
-    const char *payload = "";
+    const char *payload;
     switch (this->device_->swing_mode) {
       case CLIMATE_SWING_OFF:
         payload = "off";
@@ -392,6 +442,8 @@ bool MQTTClimateComponent::publish_state_() {
       case CLIMATE_SWING_HORIZONTAL:
         payload = "horizontal";
         break;
+      default:
+        payload = "unknown";
     }
     if (!this->publish(this->get_swing_mode_state_topic(), payload))
       success = false;

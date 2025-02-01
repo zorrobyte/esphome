@@ -1,7 +1,9 @@
+#include "mqtt_backend_esp32.h"
+
+#ifdef USE_MQTT
 #ifdef USE_ESP32
 
 #include <string>
-#include "mqtt_backend_esp32.h"
 #include "esphome/core/log.h"
 #include "esphome/core/helpers.h"
 
@@ -45,6 +47,11 @@ bool MQTTBackendESP32::initialize_() {
     mqtt_cfg_.cert_pem = ca_certificate_.value().c_str();
     mqtt_cfg_.skip_cert_common_name_check = skip_cert_cn_check_;
     mqtt_cfg_.transport = MQTT_TRANSPORT_OVER_SSL;
+
+    if (this->cl_certificate_.has_value() && this->cl_key_.has_value()) {
+      mqtt_cfg_.client_cert_pem = this->cl_certificate_.value().c_str();
+      mqtt_cfg_.client_key_pem = this->cl_key_.value().c_str();
+    }
   } else {
     mqtt_cfg_.transport = MQTT_TRANSPORT_OVER_TCP;
   }
@@ -79,6 +86,11 @@ bool MQTTBackendESP32::initialize_() {
     mqtt_cfg_.broker.verification.certificate = ca_certificate_.value().c_str();
     mqtt_cfg_.broker.verification.skip_cert_common_name_check = skip_cert_cn_check_;
     mqtt_cfg_.broker.address.transport = MQTT_TRANSPORT_OVER_SSL;
+
+    if (this->cl_certificate_.has_value() && this->cl_key_.has_value()) {
+      mqtt_cfg_.credentials.authentication.certificate = this->cl_certificate_.value().c_str();
+      mqtt_cfg_.credentials.authentication.key = this->cl_key_.value().c_str();
+    }
   } else {
     mqtt_cfg_.broker.address.transport = MQTT_TRANSPORT_OVER_TCP;
   }
@@ -139,11 +151,11 @@ void MQTTBackendESP32::mqtt_event_handler_(const Event &event) {
       break;
     case MQTT_EVENT_DATA: {
       static std::string topic;
-      if (event.topic.length() > 0) {
+      if (!event.topic.empty()) {
         topic = event.topic;
       }
       ESP_LOGV(TAG, "MQTT_EVENT_DATA %s", topic.c_str());
-      this->on_message_.call(event.topic.length() > 0 ? topic.c_str() : nullptr, event.data.data(), event.data.size(),
+      this->on_message_.call(!event.topic.empty() ? topic.c_str() : nullptr, event.data.data(), event.data.size(),
                              event.current_data_offset, event.total_data_len);
     } break;
     case MQTT_EVENT_ERROR:
@@ -172,10 +184,11 @@ void MQTTBackendESP32::mqtt_event_handler(void *handler_args, esp_event_base_t b
   // queue event to decouple processing
   if (instance) {
     auto event = *static_cast<esp_mqtt_event_t *>(event_data);
-    instance->mqtt_events_.push(Event(event));
+    instance->mqtt_events_.emplace(event);
   }
 }
 
 }  // namespace mqtt
 }  // namespace esphome
 #endif  // USE_ESP32
+#endif

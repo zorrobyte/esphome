@@ -55,10 +55,29 @@ class DebugComponent : public PollingComponent {
 #endif  // USE_ESP32
 #endif  // USE_SENSOR
 
+#ifdef USE_ESP32
+  /**
+   * @brief Logs information about the device's partition table.
+   *
+   * This function iterates through the ESP32's partition table and logs details
+   * about each partition, including its name, type, subtype, starting address,
+   * and size. The information is useful for diagnosing issues related to flash
+   * memory or verifying the partition configuration dynamically at runtime.
+   *
+   * Only available when compiled for ESP32 platforms.
+   */
+  void log_partition_info_();
+#endif  // USE_ESP32
+
 #ifdef USE_TEXT_SENSOR
   text_sensor::TextSensor *device_info_{nullptr};
   text_sensor::TextSensor *reset_reason_{nullptr};
 #endif  // USE_TEXT_SENSOR
+
+  std::string get_reset_reason_();
+  uint32_t get_free_heap_();
+  void get_device_info_(std::string &device_info);
+  void update_platform_();
 };
 
 }  // namespace debug

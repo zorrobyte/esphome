@@ -8,14 +8,21 @@ static const char *const TAG = "matrix_keypad";
 
 void MatrixKeypad::setup() {
   for (auto *pin : this->rows_) {
+    pin->setup();
     if (!has_diodes_) {
       pin->pin_mode(gpio::FLAG_INPUT);
     } else {
-      pin->digital_write(true);
+      pin->digital_write(!has_pulldowns_);
     }
   }
-  for (auto *pin : this->columns_)
-    pin->pin_mode(gpio::FLAG_INPUT | gpio::FLAG_PULLUP);
+  for (auto *pin : this->columns_) {
+    pin->setup();
+    if (has_pulldowns_) {
+      pin->pin_mode(gpio::FLAG_INPUT);
+    } else {
+      pin->pin_mode(gpio::FLAG_INPUT | gpio::FLAG_PULLUP);
+    }
+  }
 }
 
 void MatrixKeypad::loop() {
@@ -28,9 +35,9 @@ void MatrixKeypad::loop() {
   for (auto *row : this->rows_) {
     if (!has_diodes_)
       row->pin_mode(gpio::FLAG_OUTPUT);
-    row->digital_write(false);
+    row->digital_write(has_pulldowns_);
     for (auto *col : this->columns_) {
-      if (!col->digital_read()) {
+      if (col->digital_read() == has_pulldowns_) {
         if (key != -1) {
           error = true;
         } else {
@@ -39,7 +46,7 @@ void MatrixKeypad::loop() {
       }
       pos++;
     }
-    row->digital_write(true);
+    row->digital_write(!has_pulldowns_);
     if (!has_diodes_)
       row->pin_mode(gpio::FLAG_INPUT);
   }
@@ -79,6 +86,8 @@ void MatrixKeypad::loop() {
   if (!this->keys_.empty()) {
     uint8_t keycode = this->keys_[key];
     ESP_LOGD(TAG, "key '%c' pressed", keycode);
+    for (auto &trigger : this->key_triggers_)
+      trigger->trigger(keycode);
     for (auto &listener : this->listeners_)
       listener->key_pressed(keycode);
     this->send_key_(keycode);
@@ -99,6 +108,8 @@ void MatrixKeypad::dump_config() {
 }
 
 void MatrixKeypad::register_listener(MatrixKeypadListener *listener) { this->listeners_.push_back(listener); }
+
+void MatrixKeypad::register_key_trigger(MatrixKeyTrigger *trig) { this->key_triggers_.push_back(trig); }
 
 }  // namespace matrix_keypad
 }  // namespace esphome
