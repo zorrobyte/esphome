@@ -46,6 +46,7 @@ class BSDSocketImpl : public Socket {
       close();  // NOLINT(clang-analyzer-optin.cplusplus.VirtualCall)
     }
   }
+  int connect(const struct sockaddr *addr, socklen_t addrlen) override { return ::connect(fd_, addr, addrlen); }
   std::unique_ptr<Socket> accept(struct sockaddr *addr, socklen_t *addrlen) override {
     int fd = ::accept(fd_, addr, addrlen);
     if (fd == -1)
@@ -86,6 +87,13 @@ class BSDSocketImpl : public Socket {
   }
   int listen(int backlog) override { return ::listen(fd_, backlog); }
   ssize_t read(void *buf, size_t len) override { return ::read(fd_, buf, len); }
+  ssize_t recvfrom(void *buf, size_t len, sockaddr *addr, socklen_t *addr_len) override {
+#if defined(USE_ESP32) || defined(USE_HOST)
+    return ::recvfrom(this->fd_, buf, len, 0, addr, addr_len);
+#else
+    return ::lwip_recvfrom(this->fd_, buf, len, 0, addr, addr_len);
+#endif
+  }
   ssize_t readv(const struct iovec *iov, int iovcnt) override {
 #if defined(USE_ESP32)
     return ::lwip_readv(fd_, iov, iovcnt);

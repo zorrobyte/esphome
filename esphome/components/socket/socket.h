@@ -5,6 +5,7 @@
 #include "esphome/core/optional.h"
 #include "headers.h"
 
+#if defined(USE_SOCKET_IMPL_LWIP_TCP) || defined(USE_SOCKET_IMPL_LWIP_SOCKETS) || defined(USE_SOCKET_IMPL_BSD_SOCKETS)
 namespace esphome {
 namespace socket {
 
@@ -20,7 +21,9 @@ class Socket {
   virtual int close() = 0;
   // not supported yet:
   // virtual int connect(const std::string &address) = 0;
-  // virtual int connect(const struct sockaddr *addr, socklen_t addrlen) = 0;
+#if defined(USE_SOCKET_IMPL_LWIP_SOCKETS) || defined(USE_SOCKET_IMPL_BSD_SOCKETS)
+  virtual int connect(const struct sockaddr *addr, socklen_t addrlen) = 0;
+#endif
   virtual int shutdown(int how) = 0;
 
   virtual int getpeername(struct sockaddr *addr, socklen_t *addrlen) = 0;
@@ -31,6 +34,9 @@ class Socket {
   virtual int setsockopt(int level, int optname, const void *optval, socklen_t optlen) = 0;
   virtual int listen(int backlog) = 0;
   virtual ssize_t read(void *buf, size_t len) = 0;
+#ifdef USE_SOCKET_IMPL_BSD_SOCKETS
+  virtual ssize_t recvfrom(void *buf, size_t len, sockaddr *addr, socklen_t *addr_len) = 0;
+#endif
   virtual ssize_t readv(const struct iovec *iov, int iovcnt) = 0;
   virtual ssize_t write(const void *buf, size_t len) = 0;
   virtual ssize_t writev(const struct iovec *iov, int iovcnt) = 0;
@@ -54,3 +60,4 @@ socklen_t set_sockaddr_any(struct sockaddr *addr, socklen_t addrlen, uint16_t po
 
 }  // namespace socket
 }  // namespace esphome
+#endif

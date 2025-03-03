@@ -1,22 +1,31 @@
 #pragma once
 
-#include "esphome/core/component.h"
 #include "esphome/core/defines.h"
-#include "esphome/core/automation.h"
-#include "esphome/core/helpers.h"
+#ifdef USE_WIFI
 #include "esphome/components/network/ip_address.h"
+#include "esphome/core/automation.h"
+#include "esphome/core/component.h"
+#include "esphome/core/helpers.h"
 
 #include <string>
 #include <vector>
 
 #ifdef USE_ESP32_FRAMEWORK_ARDUINO
-#include <esp_wifi.h>
-#include <WiFiType.h>
 #include <WiFi.h>
+#include <WiFiType.h>
+#include <esp_wifi.h>
 #endif
 
 #ifdef USE_LIBRETINY
 #include <WiFi.h>
+#endif
+
+#if defined(USE_ESP_IDF) && defined(USE_WIFI_WPA2_EAP)
+#if (ESP_IDF_VERSION_MAJOR >= 5) && (ESP_IDF_VERSION_MINOR >= 1)
+#include <esp_eap_client.h>
+#else
+#include <esp_wpa2.h>
+#endif
 #endif
 
 #ifdef USE_ESP8266
@@ -46,6 +55,11 @@ namespace wifi {
 struct SavedWifiSettings {
   char ssid[33];
   char password[65];
+} PACKED;  // NOLINT
+
+struct SavedWifiFastConnectSettings {
+  uint8_t bssid[6];
+  uint8_t channel;
 } PACKED;  // NOLINT
 
 enum WiFiComponentState {
@@ -97,6 +111,10 @@ struct EAPAuth {
   // used for EAP-TLS
   const char *client_cert;
   const char *client_key;
+// used for EAP-TTLS
+#ifdef USE_ESP_IDF
+  esp_eap_ttls_phase2_types ttls_phase_2;
+#endif
 };
 #endif  // USE_WIFI_WPA2_EAP
 
@@ -191,9 +209,11 @@ class WiFiComponent : public Component {
   WiFiComponent();
 
   void set_sta(const WiFiAP &ap);
+  WiFiAP get_sta() { return this->selected_ap_; }
   void add_sta(const WiFiAP &ap);
   void clear_sta();
 
+#ifdef USE_WIFI_AP
   /** Setup an Access Point that should be created if no connection to a station can be made.
    *
    * This can also be used without set_sta(). Then the AP will always be active.
@@ -203,6 +223,7 @@ class WiFiComponent : public Component {
    */
   void set_ap(const WiFiAP &ap);
   WiFiAP get_ap() { return this->ap_; }
+#endif  // USE_WIFI_AP
 
   void enable();
   void disable();
@@ -251,7 +272,7 @@ class WiFiComponent : public Component {
 #endif
 
   network::IPAddress get_dns_address(int num);
-  network::IPAddress get_ip_address();
+  network::IPAddresses get_ip_addresses();
   std::string get_use_address() const;
   void set_use_address(const std::string &use_address);
 
@@ -286,7 +307,7 @@ class WiFiComponent : public Component {
     });
   }
 
-  network::IPAddress wifi_sta_ip();
+  network::IPAddresses wifi_sta_ip_addresses();
   std::string wifi_ssid();
   bssid_t wifi_bssid();
 
@@ -294,9 +315,18 @@ class WiFiComponent : public Component {
 
   void set_enable_on_boot(bool enable_on_boot) { this->enable_on_boot_ = enable_on_boot; }
 
+  Trigger<> *get_connect_trigger() const { return this->connect_trigger_; };
+  Trigger<> *get_disconnect_trigger() const { return this->disconnect_trigger_; };
+
+  int32_t get_wifi_channel();
+
  protected:
   static std::string format_mac_addr(const uint8_t mac[6]);
+
+#ifdef USE_WIFI_AP
   void setup_ap_config_();
+#endif  // USE_WIFI_AP
+
   void print_connect_params_();
 
   void wifi_loop_();
@@ -310,16 +340,23 @@ class WiFiComponent : public Component {
   void wifi_pre_setup_();
   WiFiSTAConnectStatus wifi_sta_connect_status_();
   bool wifi_scan_start_(bool passive);
+
+#ifdef USE_WIFI_AP
   bool wifi_ap_ip_config_(optional<ManualIP> manual_ip);
   bool wifi_start_ap_(const WiFiAP &ap);
+#endif  // USE_WIFI_AP
+
   bool wifi_disconnect_();
-  int32_t wifi_channel_();
+
   network::IPAddress wifi_subnet_mask_();
   network::IPAddress wifi_gateway_ip_();
   network::IPAddress wifi_dns_ip_(int num);
 
   bool is_captive_portal_active_();
   bool is_esp32_improv_active_();
+
+  void load_fast_connect_settings_();
+  void save_fast_connect_settings_();
 
 #ifdef USE_ESP8266
   static void wifi_event_callback(System_Event_t *event);
@@ -350,10 +387,12 @@ class WiFiComponent : public Component {
   std::vector<WiFiSTAPriority> sta_priorities_;
   WiFiAP selected_ap_;
   bool fast_connect_{false};
+  bool retry_hidden_{false};
 
   bool has_ap_{false};
   WiFiAP ap_;
   WiFiComponentState state_{WIFI_COMPONENT_STATE_OFF};
+  bool handled_connected_state_{false};
   uint32_t action_started_;
   uint8_t num_retried_{0};
   uint32_t last_connected_{0};
@@ -367,12 +406,20 @@ class WiFiComponent : public Component {
   optional<float> output_power_;
   bool passive_scan_{false};
   ESPPreferenceObject pref_;
+  ESPPreferenceObject fast_connect_pref_;
   bool has_saved_wifi_settings_{false};
 #ifdef USE_WIFI_11KV_SUPPORT
   bool btm_{false};
   bool rrm_{false};
 #endif
   bool enable_on_boot_;
+  bool got_ipv4_address_{false};
+#if USE_NETWORK_IPV6
+  uint8_t num_ipv6_addresses_{0};
+#endif /* USE_NETWORK_IPV6 */
+
+  Trigger<> *connect_trigger_{new Trigger<>()};
+  Trigger<> *disconnect_trigger_{new Trigger<>()};
 };
 
 extern WiFiComponent *global_wifi_component;  // NOLINT(cppcoreguidelines-avoid-non-const-global-variables)
@@ -397,5 +444,84 @@ template<typename... Ts> class WiFiDisableAction : public Action<Ts...> {
   void play(Ts... x) override { global_wifi_component->disable(); }
 };
 
+template<typename... Ts> class WiFiConfigureAction : public Action<Ts...>, public Component {
+ public:
+  TEMPLATABLE_VALUE(std::string, ssid)
+  TEMPLATABLE_VALUE(std::string, password)
+  TEMPLATABLE_VALUE(bool, save)
+  TEMPLATABLE_VALUE(uint32_t, connection_timeout)
+
+  void play(Ts... x) override {
+    auto ssid = this->ssid_.value(x...);
+    auto password = this->password_.value(x...);
+    // Avoid multiple calls
+    if (this->connecting_)
+      return;
+    // If already connected to the same AP, do nothing
+    if (global_wifi_component->wifi_ssid() == ssid) {
+      // Callback to notify the user that the connection was successful
+      this->connect_trigger_->trigger();
+      return;
+    }
+    // Create a new WiFiAP object with the new SSID and password
+    this->new_sta_.set_ssid(ssid);
+    this->new_sta_.set_password(password);
+    // Save the current STA
+    this->old_sta_ = global_wifi_component->get_sta();
+    // Disable WiFi
+    global_wifi_component->disable();
+    // Set the state to connecting
+    this->connecting_ = true;
+    // Store the new STA so once the WiFi is enabled, it will connect to it
+    // This is necessary because the WiFiComponent will raise an error and fallback to the saved STA
+    // if trying to connect to a new STA while already connected to another one
+    if (this->save_.value(x...)) {
+      global_wifi_component->save_wifi_sta(new_sta_.get_ssid(), new_sta_.get_password());
+    } else {
+      global_wifi_component->set_sta(new_sta_);
+    }
+    // Enable WiFi
+    global_wifi_component->enable();
+    // Set timeout for the connection
+    this->set_timeout("wifi-connect-timeout", this->connection_timeout_.value(x...), [this]() {
+      this->connecting_ = false;
+      // If the timeout is reached, stop connecting and revert to the old AP
+      global_wifi_component->disable();
+      global_wifi_component->save_wifi_sta(old_sta_.get_ssid(), old_sta_.get_password());
+      global_wifi_component->enable();
+      // Callback to notify the user that the connection failed
+      this->error_trigger_->trigger();
+    });
+  }
+
+  Trigger<> *get_connect_trigger() const { return this->connect_trigger_; }
+  Trigger<> *get_error_trigger() const { return this->error_trigger_; }
+
+  void loop() override {
+    if (!this->connecting_)
+      return;
+    if (global_wifi_component->is_connected()) {
+      // The WiFi is connected, stop the timeout and reset the connecting flag
+      this->cancel_timeout("wifi-connect-timeout");
+      this->connecting_ = false;
+      if (global_wifi_component->wifi_ssid() == this->new_sta_.get_ssid()) {
+        // Callback to notify the user that the connection was successful
+        this->connect_trigger_->trigger();
+      } else {
+        // Callback to notify the user that the connection failed
+        this->error_trigger_->trigger();
+      }
+    }
+  }
+
+ protected:
+  bool connecting_{false};
+  WiFiAP new_sta_;
+  WiFiAP old_sta_;
+  Trigger<> *connect_trigger_{new Trigger<>()};
+  Trigger<> *error_trigger_{new Trigger<>()};
+};
+
 }  // namespace wifi
 }  // namespace esphome
+#endif

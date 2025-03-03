@@ -1,9 +1,21 @@
 import re
 
-import esphome.codegen as cg
-import esphome.config_validation as cv
 from esphome import automation
 from esphome.automation import LambdaAction
+import esphome.codegen as cg
+from esphome.components.esp32 import add_idf_sdkconfig_option, get_esp32_variant
+from esphome.components.esp32.const import (
+    VARIANT_ESP32,
+    VARIANT_ESP32C2,
+    VARIANT_ESP32C3,
+    VARIANT_ESP32C6,
+    VARIANT_ESP32H2,
+    VARIANT_ESP32S2,
+    VARIANT_ESP32S3,
+)
+from esphome.components.libretiny import get_libretiny_component, get_libretiny_family
+from esphome.components.libretiny.const import COMPONENT_BK72XX, COMPONENT_RTL87XX
+import esphome.config_validation as cv
 from esphome.const import (
     CONF_ARGS,
     CONF_BAUD_RATE,
@@ -18,26 +30,12 @@ from esphome.const import (
     CONF_TRIGGER_ID,
     CONF_TX_BUFFER_SIZE,
     PLATFORM_BK72XX,
-    PLATFORM_RTL87XX,
     PLATFORM_ESP32,
     PLATFORM_ESP8266,
     PLATFORM_RP2040,
+    PLATFORM_RTL87XX,
 )
-from esphome.core import CORE, EsphomeError, Lambda, coroutine_with_priority
-from esphome.components.esp32 import add_idf_sdkconfig_option, get_esp32_variant
-from esphome.components.esp32.const import (
-    VARIANT_ESP32,
-    VARIANT_ESP32S2,
-    VARIANT_ESP32C3,
-    VARIANT_ESP32S3,
-    VARIANT_ESP32C2,
-    VARIANT_ESP32C6,
-)
-from esphome.components.libretiny import get_libretiny_component, get_libretiny_family
-from esphome.components.libretiny.const import (
-    COMPONENT_BK72XX,
-    COMPONENT_RTL87XX,
-)
+from esphome.core import CORE, Lambda, coroutine_with_priority
 
 CODEOWNERS = ["@esphome/core"]
 logger_ns = cg.esphome_ns.namespace("logger")
@@ -79,13 +77,17 @@ USB_SERIAL_JTAG = "USB_SERIAL_JTAG"
 USB_CDC = "USB_CDC"
 DEFAULT = "DEFAULT"
 
+CONF_INITIAL_LEVEL = "initial_level"
+CONF_LOGGER_ID = "logger_id"
+
 UART_SELECTION_ESP32 = {
     VARIANT_ESP32: [UART0, UART1, UART2],
     VARIANT_ESP32S2: [UART0, UART1, USB_CDC],
     VARIANT_ESP32S3: [UART0, UART1, USB_CDC, USB_SERIAL_JTAG],
-    VARIANT_ESP32C3: [UART0, UART1, USB_SERIAL_JTAG],
+    VARIANT_ESP32C3: [UART0, UART1, USB_CDC, USB_SERIAL_JTAG],
     VARIANT_ESP32C2: [UART0, UART1],
     VARIANT_ESP32C6: [UART0, UART1, USB_CDC, USB_SERIAL_JTAG],
+    VARIANT_ESP32H2: [UART0, UART1, USB_CDC, USB_SERIAL_JTAG],
 }
 
 UART_SELECTION_ESP8266 = [UART0, UART0_SWAP, UART1]
@@ -95,7 +97,7 @@ UART_SELECTION_LIBRETINY = {
     COMPONENT_RTL87XX: [DEFAULT, UART0, UART1, UART2],
 }
 
-ESP_IDF_UARTS = [USB_CDC, USB_SERIAL_JTAG]
+ESP_ARDUINO_UNSUPPORTED_USB_UARTS = [USB_SERIAL_JTAG]
 
 UART_SELECTION_RP2040 = [USB_CDC, UART0, UART1]
 
@@ -110,11 +112,18 @@ HARDWARE_UART_TO_UART_SELECTION = {
 }
 
 HARDWARE_UART_TO_SERIAL = {
-    UART0: cg.global_ns.Serial,
-    UART0_SWAP: cg.global_ns.Serial,
-    UART1: cg.global_ns.Serial1,
-    UART2: cg.global_ns.Serial2,
-    DEFAULT: cg.global_ns.Serial,
+    PLATFORM_ESP8266: {
+        UART0: cg.global_ns.Serial,
+        UART0_SWAP: cg.global_ns.Serial,
+        UART1: cg.global_ns.Serial1,
+        UART2: cg.global_ns.Serial2,
+        DEFAULT: cg.global_ns.Serial,
+    },
+    PLATFORM_RP2040: {
+        UART0: cg.global_ns.Serial1,
+        UART1: cg.global_ns.Serial2,
+        USB_CDC: cg.global_ns.Serial,
+    },
 }
 
 is_log_level = cv.one_of(*LOG_LEVELS, upper=True)
@@ -122,9 +131,13 @@ is_log_level = cv.one_of(*LOG_LEVELS, upper=True)
 
 def uart_selection(value):
     if CORE.is_esp32:
-        if value.upper() in ESP_IDF_UARTS and not CORE.using_esp_idf:
-            raise cv.Invalid(f"Only esp-idf framework supports {value}.")
+        if CORE.using_arduino and value.upper() in ESP_ARDUINO_UNSUPPORTED_USB_UARTS:
+            raise cv.Invalid(f"Arduino framework does not support {value}.")
         variant = get_esp32_variant()
+        if CORE.using_esp_idf and variant == VARIANT_ESP32C3 and value == USB_CDC:
+            raise cv.Invalid(
+                f"{value} is not supported for variant {variant} when using ESP-IDF."
+            )
         if variant in UART_SELECTION_ESP32:
             return cv.one_of(*UART_SELECTION_ESP32[variant], upper=True)(value)
     if CORE.is_esp8266:
@@ -138,15 +151,17 @@ def uart_selection(value):
         component = get_libretiny_component()
         if component in UART_SELECTION_LIBRETINY:
             return cv.one_of(*UART_SELECTION_LIBRETINY[component], upper=True)(value)
+    if CORE.is_host:
+        raise cv.Invalid("Uart selection not valid for host platform")
     raise NotImplementedError
 
 
 def validate_local_no_higher_than_global(value):
-    global_level = value.get(CONF_LEVEL, "DEBUG")
+    global_level = LOG_LEVEL_SEVERITY.index(value[CONF_LEVEL])
     for tag, level in value.get(CONF_LOGS, {}).items():
-        if LOG_LEVEL_SEVERITY.index(level) > LOG_LEVEL_SEVERITY.index(global_level):
-            raise EsphomeError(
-                f"The local log level {level} for {tag} must be less severe than the global log level {global_level}."
+        if LOG_LEVEL_SEVERITY.index(level) > global_level:
+            raise cv.Invalid(
+                f"The configured log level for {tag} ({level}) must be no more severe than the global log level {value[CONF_LEVEL]}."
             )
     return value
 
@@ -169,6 +184,13 @@ CONFIG_SCHEMA = cv.All(
                 CONF_HARDWARE_UART,
                 esp8266=UART0,
                 esp32=UART0,
+                esp32_s2=USB_CDC,
+                esp32_s3_arduino=USB_CDC,
+                esp32_s3_idf=USB_SERIAL_JTAG,
+                esp32_c3_arduino=USB_CDC,
+                esp32_c3_idf=USB_SERIAL_JTAG,
+                esp32_c6_arduino=USB_CDC,
+                esp32_c6_idf=USB_SERIAL_JTAG,
                 rp2040=USB_CDC,
                 bk72xx=DEFAULT,
                 rtl87xx=DEFAULT,
@@ -190,6 +212,7 @@ CONFIG_SCHEMA = cv.All(
                     cv.string: is_log_level,
                 }
             ),
+            cv.Optional(CONF_INITIAL_LEVEL): is_log_level,
             cv.Optional(CONF_ON_MESSAGE): automation.validate_automation(
                 {
                     cv.GenerateID(CONF_TRIGGER_ID): cv.declare_id(LoggerMessageTrigger),
@@ -208,7 +231,14 @@ CONFIG_SCHEMA = cv.All(
 @coroutine_with_priority(90.0)
 async def to_code(config):
     baud_rate = config[CONF_BAUD_RATE]
-    log = cg.new_Pvariable(config[CONF_ID], baud_rate, config[CONF_TX_BUFFER_SIZE])
+    level = config[CONF_LEVEL]
+    initial_level = LOG_LEVELS[config.get(CONF_INITIAL_LEVEL, level)]
+    log = cg.new_Pvariable(
+        config[CONF_ID],
+        baud_rate,
+        config[CONF_TX_BUFFER_SIZE],
+    )
+    cg.add(log.set_log_level(initial_level))
     if CONF_HARDWARE_UART in config:
         cg.add(
             log.set_uart_selection(
@@ -217,10 +247,9 @@ async def to_code(config):
         )
     cg.add(log.pre_setup())
 
-    for tag, level in config[CONF_LOGS].items():
-        cg.add(log.set_log_level(tag, LOG_LEVELS[level]))
+    for tag, log_level in config[CONF_LOGS].items():
+        cg.add(log.set_log_level(tag, LOG_LEVELS[log_level]))
 
-    level = config[CONF_LEVEL]
     cg.add_define("USE_LOGGER")
     this_severity = LOG_LEVEL_SEVERITY.index(level)
     cg.add_build_flag(f"-DESPHOME_LOG_LEVEL={LOG_LEVELS[level]}")
@@ -231,8 +260,14 @@ async def to_code(config):
     is_at_least_very_verbose = this_severity >= very_verbose_severity
     has_serial_logging = baud_rate != 0
 
-    if CORE.is_esp8266 and has_serial_logging and is_at_least_verbose:
-        debug_serial_port = HARDWARE_UART_TO_SERIAL[config.get(CONF_HARDWARE_UART)]
+    if (
+        (CORE.is_esp8266 or CORE.is_rp2040)
+        and has_serial_logging
+        and is_at_least_verbose
+    ):
+        debug_serial_port = HARDWARE_UART_TO_SERIAL[CORE.target_platform][
+            config.get(CONF_HARDWARE_UART)
+        ]
         cg.add_build_flag(f"-DDEBUG_ESP_PORT={debug_serial_port}")
         cg.add_build_flag("-DLWIP_DEBUG")
         DEBUG_COMPONENTS = {
@@ -256,11 +291,27 @@ async def to_code(config):
     if config.get(CONF_ESP8266_STORE_LOG_STRINGS_IN_FLASH):
         cg.add_build_flag("-DUSE_STORE_LOG_STR_IN_FLASH")
 
+    if CORE.using_arduino:
+        if config[CONF_HARDWARE_UART] == USB_CDC:
+            cg.add_build_flag("-DARDUINO_USB_CDC_ON_BOOT=1")
+            if CORE.is_esp32 and get_esp32_variant() == VARIANT_ESP32C3:
+                cg.add_build_flag("-DARDUINO_USB_MODE=1")
+
     if CORE.using_esp_idf:
         if config[CONF_HARDWARE_UART] == USB_CDC:
             add_idf_sdkconfig_option("CONFIG_ESP_CONSOLE_USB_CDC", True)
         elif config[CONF_HARDWARE_UART] == USB_SERIAL_JTAG:
             add_idf_sdkconfig_option("CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG", True)
+    try:
+        uart_selection(USB_SERIAL_JTAG)
+        cg.add_define("USE_LOGGER_USB_SERIAL_JTAG")
+    except cv.Invalid:
+        pass
+    try:
+        uart_selection(USB_CDC)
+        cg.add_define("USE_LOGGER_USB_CDC")
+    except cv.Invalid:
+        pass
 
     # Register at end for safe mode
     await cg.register_component(log, config)
@@ -323,6 +374,30 @@ async def logger_log_action_to_code(config, action_id, template_arg, args):
     args_ = [cg.RawExpression(str(x)) for x in config[CONF_ARGS]]
 
     text = str(cg.statement(esp_log(config[CONF_TAG], config[CONF_FORMAT], *args_)))
+
+    lambda_ = await cg.process_lambda(Lambda(text), args, return_type=cg.void)
+    return cg.new_Pvariable(action_id, template_arg, lambda_)
+
+
+@automation.register_action(
+    "logger.set_level",
+    LambdaAction,
+    cv.maybe_simple_value(
+        {
+            cv.GenerateID(CONF_LOGGER_ID): cv.use_id(Logger),
+            cv.Required(CONF_LEVEL): is_log_level,
+            cv.Optional(CONF_TAG): cv.string,
+        },
+        key=CONF_LEVEL,
+    ),
+)
+async def logger_set_level_to_code(config, action_id, template_arg, args):
+    level = LOG_LEVELS[config[CONF_LEVEL]]
+    logger = await cg.get_variable(config[CONF_LOGGER_ID])
+    if tag := config.get(CONF_TAG):
+        text = str(cg.statement(logger.set_log_level(tag, level)))
+    else:
+        text = str(cg.statement(logger.set_log_level(level)))
 
     lambda_ = await cg.process_lambda(Lambda(text), args, return_type=cg.void)
     return cg.new_Pvariable(action_id, template_arg, lambda_)

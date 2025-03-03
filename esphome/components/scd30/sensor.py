@@ -8,6 +8,7 @@ from esphome.const import (
     CONF_HUMIDITY,
     CONF_TEMPERATURE,
     CONF_CO2,
+    CONF_TEMPERATURE_OFFSET,
     CONF_UPDATE_INTERVAL,
     CONF_VALUE,
     DEVICE_CLASS_CARBON_DIOXIDE,
@@ -36,7 +37,6 @@ ForceRecalibrationWithReference = scd30_ns.class_(
 CONF_AUTOMATIC_SELF_CALIBRATION = "automatic_self_calibration"
 CONF_ALTITUDE_COMPENSATION = "altitude_compensation"
 CONF_AMBIENT_PRESSURE_COMPENSATION = "ambient_pressure_compensation"
-CONF_TEMPERATURE_OFFSET = "temperature_offset"
 
 
 CONFIG_SCHEMA = (
@@ -75,7 +75,7 @@ CONFIG_SCHEMA = (
             cv.Optional(CONF_UPDATE_INTERVAL, default="60s"): cv.All(
                 cv.positive_time_period_seconds,
                 cv.Range(
-                    min=core.TimePeriod(seconds=1), max=core.TimePeriod(seconds=1800)
+                    min=core.TimePeriod(seconds=2), max=core.TimePeriod(seconds=1800)
                 ),
             ),
         }

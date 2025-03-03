@@ -133,6 +133,7 @@ void ST7789V::dump_config() {
   LOG_PIN("  Reset Pin: ", this->reset_pin_);
   LOG_PIN("  B/L Pin: ", this->backlight_pin_);
   LOG_UPDATE_INTERVAL(this);
+  ESP_LOGCONFIG(TAG, "  Data rate: %dMHz", (unsigned) (this->data_rate_ / 1000000));
 #ifdef USE_POWER_SUPPLY
   ESP_LOGCONFIG(TAG, "  Power Supply Configured: yes");
 #endif
@@ -251,7 +252,7 @@ void ST7789V::write_color_(uint16_t color, uint16_t size) {
   }
 
   this->dc_pin_->digital_write(true);
-  return write_array(byte, size * 2);
+  write_array(byte, size * 2);
 }
 
 size_t ST7789V::get_buffer_length_() {

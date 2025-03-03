@@ -23,6 +23,7 @@ DHT_MODELS = {
     "AUTO_DETECT": DHTModel.DHT_MODEL_AUTO_DETECT,
     "DHT11": DHTModel.DHT_MODEL_DHT11,
     "DHT22": DHTModel.DHT_MODEL_DHT22,
+    "AM2120": DHTModel.DHT_MODEL_AM2120,
     "AM2302": DHTModel.DHT_MODEL_AM2302,
     "RHT03": DHTModel.DHT_MODEL_RHT03,
     "SI7021": DHTModel.DHT_MODEL_SI7021,
@@ -33,7 +34,7 @@ DHT = dht_ns.class_("DHT", cg.PollingComponent)
 CONFIG_SCHEMA = cv.Schema(
     {
         cv.GenerateID(): cv.declare_id(DHT),
-        cv.Required(CONF_PIN): pins.internal_gpio_input_pin_schema,
+        cv.Required(CONF_PIN): pins.internal_gpio_input_pullup_pin_schema,
         cv.Optional(CONF_TEMPERATURE): sensor.sensor_schema(
             unit_of_measurement=UNIT_CELSIUS,
             accuracy_decimals=1,
